@@ -2,106 +2,121 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 import streamlit as st
-from babel.numbers import format_currency
+import datetime
 
-# Set Page Config
-st.set_page_config(page_title="E-Commerce Data Dashboard", layout="wide")
+# --- 1. KONFIGURASI HALAMAN ---
+st.set_page_config(page_title="E-Commerce Performance Dashboard", layout="wide")
 
-# --- LOAD DATA ---
+st.markdown("""
+    <style>
+    .stDateInput div[data-baseweb="input"] > input {
+        caret-color: transparent;
+        cursor: pointer;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+# --- 3. FUNGSI LOAD DATA ---
 @st.cache_data
 def load_data():
+    # Pastikan main_data.csv sudah ada di folder yang sama
     df = pd.read_csv("main_data.csv")
     df['order_purchase_timestamp'] = pd.to_datetime(df['order_purchase_timestamp'])
     return df
 
 all_df = load_data()
 
-# --- SIDEBAR (FITUR INTERAKTIF) ---
+# --- 4. SIDEBAR ---
 with st.sidebar:
-    st.title(" E-Commerce Project")
+    st.title("E-Commerce Project")
     st.image("https://github.com/dicodingacademy/assets/raw/main/logo.png")
     
-    # Filter Rentang Waktu
-    min_date = all_df["order_purchase_timestamp"].min()
-    max_date = all_df["order_purchase_timestamp"].max()
+    st.markdown("### 📅 Periode Analisis")
     
-    start_date, end_date = st.date_input(
-        label='Rentang Waktu',
-        min_value=min_date,
-        max_value=max_date,
-        value=[min_date, max_date]
-    )
+    # Rentang data dikunci hanya 2017 - 2018 sesuai ketersediaan data
+    min_date = datetime.date(2017, 1, 1)
+    max_date = datetime.date(2018, 12, 31)
+    
+    try:
+        user_date = st.date_input(
+            label='Pilih Rentang Tanggal',
+            min_value=min_date,
+            max_value=max_date,
+            value=[min_date, max_date]
+        )
+        
+        if isinstance(user_date, (list, tuple)) and len(user_date) == 2:
+            start_date, end_date = user_date
+        else:
+            st.info("Silakan pilih tanggal mulai dan tanggal akhir pada kalender.")
+            st.stop()
+    except Exception:
+        st.stop()
 
-# Filter dataframe berdasarkan input
-main_df = all_df[(all_df["order_purchase_timestamp"] >= str(start_date)) & 
-                (all_df["order_purchase_timestamp"] <= str(end_date))]
+    st.markdown("---")
+    st.info("""
+    **🛠️ Cara Pemakaian Fitur Dashboard:**
+    1. Klik kotak tanggal di atas untuk memunculkan kalender.
+    2. Pilih **Tanggal Mulai** (Klik pertama).
+    3. Pilih **Tanggal Akhir** (Klik kedua).
+    """)
 
-# --- DASHBOARD MAIN PAGE ---
-st.header('E-Commerce Performance Dashboard ')
+# --- 5. FILTERING DATA ---
+main_df = all_df[(all_df["order_purchase_timestamp"].dt.date >= start_date) & 
+                (all_df["order_purchase_timestamp"].dt.date <= end_date)]
 
-# --- VISUALISASI 1: REVENUE TREND ---
-st.subheader('Total Revenue & Growth (2017 Fokus)')
+# --- 6. TAMPILAN UTAMA ---
+st.header('Performance Dashboard 📊')
 
-# Menghitung data untuk grafik
-revenue_df = main_df.resample(rule='M', on='order_purchase_timestamp').agg({
-    "payment_value": "sum"
-}).reset_index()
-revenue_df.rename(columns={"payment_value": "revenue"}, inplace=True)
-revenue_df['growth_pct'] = revenue_df['revenue'].pct_change() * 100
+# --- VISUALISASI 1: TREN PENDAPATAN & PERTUMBUHAN ---
+st.subheader('Monthly Revenue Trend & Growth')
 
-# Metric Cards
-col1, col2 = st.columns(2)
-with col1:
-    total_rev = format_currency(revenue_df.revenue.sum(), "BRL", locale='pt_BR')
-    st.metric("Total Revenue", value=total_rev)
-with col2:
-    # Mengambil growth bulan terakhir yang ada di filter
-    last_growth = revenue_df['growth_pct'].iloc[-1] if len(revenue_df) > 1 else 0
-    st.metric("Last Month Growth", value=f"{last_growth:.2f}%", delta=f"{last_growth:.2f}%")
+# Agregasi data bulanan
+monthly_rev = main_df.resample(rule='M', on='order_purchase_timestamp').agg({"payment_value": "sum"}).reset_index()
+monthly_rev['growth'] = monthly_rev['payment_value'].pct_change() * 100
 
-# Plotting Line Chart
-fig, ax = plt.subplots(figsize=(16, 8))
-sns.lineplot(x='order_purchase_timestamp', y='revenue', data=revenue_df, marker='o', color='#2ecc71', linewidth=3, ax=ax)
+fig, ax = plt.subplots(figsize=(14, 6))
+ax.plot(monthly_rev["order_purchase_timestamp"], monthly_rev["payment_value"], marker='o', color='#27ae60', linewidth=2.5)
 
-# Tambahkan label persentase pertumbuhan
-for i in range(len(revenue_df)):
-    growth = revenue_df['growth_pct'].iloc[i]
+# Menambahkan anotasi persentase pertumbuhan di atas titik data
+for i in range(len(monthly_rev)):
+    growth = monthly_rev['growth'].iloc[i]
     if not pd.isna(growth):
-        ax.text(revenue_df['order_purchase_timestamp'].iloc[i], 
-                revenue_df['revenue'].iloc[i] + (revenue_df['revenue'].max()*0.05), 
-                f'{growth:+.1f}%', fontsize=12, ha='center', fontweight='bold', 
-                color='green' if growth > 0 else 'red')
+        color = 'green' if growth > 0 else 'red'
+        ax.text(monthly_rev['order_purchase_timestamp'].iloc[i], 
+                monthly_rev['payment_value'].iloc[i] * 1.05, 
+                f'{growth:+.1f}%', 
+                fontsize=10, ha='center', fontweight='bold', color=color)
 
-ax.set_title("Monthly Revenue Trend", fontsize=20)
-ax.set_xlabel(None)
 ax.set_ylabel("Revenue (BRL)")
+ax.set_xlabel(None)
+ax.grid(axis='y', linestyle='--', alpha=0.3)
 st.pyplot(fig)
 
-# --- VISUALISASI 2: PRODUCT PERFORMANCE ---
-st.subheader("Best & Worst Performing Product Category")
+st.divider()
 
-# Menghitung volume produk (Hanya status Delivered sudah terjamin di main_data.csv)
-category_sales = main_df.groupby('product_category_name_english')['order_item_id'].count().reset_index()
-category_sales.rename(columns={'order_item_id': 'total_sold'}, inplace=True)
-category_sales = category_sales.sort_values(by='total_sold', ascending=False)
+# --- VISUALISASI 2: PERFORMA KATEGORI PRODUK ---
+st.subheader("Product Category Performance")
+category_perf = main_df.groupby("product_category_name_english")["order_item_id"].count().sort_values(ascending=False).reset_index()
 
-fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(35, 15))
+col1, col2 = st.columns(2)
 
-# Top 5
-sns.barplot(x="total_sold", y="product_category_name_english", data=category_sales.head(5), palette="Greens_r", ax=ax[0])
-ax[0].set_title("5 Kategori Produk Terlaris", fontsize=40)
-ax[0].tick_params(axis='y', labelsize=30)
-ax[0].tick_params(axis='x', labelsize=25)
+with col1:
+    st.write("**Top 5 Categories (Highest Sales)**")
+    fig, ax = plt.subplots(figsize=(8, 5))
+    sns.barplot(x="order_item_id", y="product_category_name_english", data=category_perf.head(5), palette="Greens_r")
+    ax.set_xlabel("Total Items Sold")
+    ax.set_ylabel(None)
+    st.pyplot(fig)
 
-# Bottom 5
-sns.barplot(x="total_sold", y="product_category_name_english", data=category_sales.tail(5).sort_values(by="total_sold", ascending=True), palette="Reds", ax=ax[1])
-ax[1].set_title("5 Kategori Produk Terendah", fontsize=40)
-ax[1].invert_xaxis() # Supaya bar chart terendah menghadap ke kiri atau tetap rapi
-ax[1].yaxis.set_label_position("right")
-ax[1].yaxis.tick_right()
-ax[1].tick_params(axis='y', labelsize=30)
-ax[1].tick_params(axis='x', labelsize=25)
+with col2:
+    st.write("**Bottom 5 Categories (Lowest Sales)**")
+    # Diurutkan agar yang paling rendah ada di posisi yang rapi
+    bottom_5 = category_perf.tail(5).sort_values(by="order_item_id")
+    fig, ax = plt.subplots(figsize=(8, 5))
+    sns.barplot(x="order_item_id", y="product_category_name_english", data=bottom_5, palette="Reds")
+    ax.set_xlabel("Total Items Sold")
+    ax.set_ylabel(None)
+    st.pyplot(fig)
 
-st.pyplot(fig)
-
-st.caption('Copyright (c) Devan Project 2024 - Data Terfilter: Status Delivered')
+st.caption(f'Data ditampilkan dari periode {start_date} hingga {end_date} | Status: Delivered')
